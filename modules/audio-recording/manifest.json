@@ -1,0 +1,12 @@
+{
+  "id": "audio-recording",
+  "displayName": "Audio evidence",
+  "summary": "Capture an explicit microphone recording and export a local audio evidence file.",
+  "version": "1.0.0",
+  "maturity": "development",
+  "rendererEntry": "renderer.js",
+  "iconHint": "audio",
+  "capabilities": [
+    { "id": "audio-recording", "displayName": "Audio recording", "summary": "Record from a chosen microphone, review it, then export the audio file.", "version": "1.0.0", "maturity": "development", "presentation": "interactive", "adapters": ["capture.microphone", "file", "evidence"], "execution": { "inputs": ["microphone"], "outputs": ["audio-file"], "interaction": "required" }, "settings": [{ "id": "format", "label": "Preferred format", "type": "choice", "default": "audio/webm", "choices": ["audio/webm", "audio/ogg"] }] }
+  ]
+}

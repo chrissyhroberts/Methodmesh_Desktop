@@ -35,6 +35,8 @@ Every Android module receives one of these dispositions before any code is writt
 
 **Exit criteria:** a module can be installed/discovered, run through a test harness, return a versioned execution result, and export optional provenance without depending on renderer-local state; adding a contract-test module requires no host code change.
 
+**Progress (desktop prototype):** manifest discovery, persisted state, artifacts, execution history, adapter inventory and validated protocol launch plans are implemented. Renderer implementations still need to be moved from the shared registry into module directories, and the next milestone is a versioned executor result envelope that can advance guided protocol runs safely.
+
 ## Phase 1 — Artifacts and execution
 
 **Goal:** introduce the shared substrate before adding more modules.

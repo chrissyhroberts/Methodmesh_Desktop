@@ -1,0 +1,12 @@
+{
+  "id": "local-signing",
+  "displayName": "Local cryptography",
+  "summary": "Create portable cryptographic signatures with a user-generated local key pair.",
+  "version": "1.0.0",
+  "maturity": "development",
+  "rendererEntry": "renderer.js",
+  "iconHint": "signature",
+  "capabilities": [
+    { "id": "local-signing", "displayName": "Sign file digest", "summary": "Generate an RSA signature over a file SHA-256 digest and export a portable verification bundle.", "version": "1.0.0", "maturity": "development", "presentation": "interactive", "adapters": ["file", "evidence"], "execution": { "inputs": ["file"], "outputs": ["signature-bundle"], "interaction": "required" }, "settings": [{ "id": "algorithm", "label": "Algorithm", "type": "choice", "default": "RSA-PSS-SHA-256", "choices": ["RSA-PSS-SHA-256"] }] }
+  ]
+}

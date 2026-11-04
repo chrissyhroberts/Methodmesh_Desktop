@@ -51,6 +51,40 @@ class DesktopRuntime {
   publicState() { const { executions, ...state } = this.state; return state; }
   executionHistory() { return this.state.executions; }
 
+  /** Resolve persisted work into a capability-neutral launch plan.
+   * The host does not infer inputs or settings: every step remains owned by
+   * its module manifest and the saved preset that selected it. */
+  launchPlan({ targetType, targetId }) {
+    if (!new Set(["preset", "protocol"]).has(targetType)) throw new Error("A launch target must be a preset or protocol.");
+    const presets = new Map(this.state.presets.map(preset => [preset.id, preset]));
+    const makeStep = (preset, position = 1, policy = {}) => {
+      if (!preset) throw new Error("The saved preset is unavailable.");
+      const capability = this.capability(preset.targetId);
+      if (!capability || capability.version !== preset.capabilityVersion) throw new Error(`Preset '${preset.name}' requires an unavailable or incompatible capability.`);
+      validateSettings(capability.settings || [], preset.settings || {});
+      return { id: crypto.randomUUID(), position, presetId: preset.id, presetName: preset.name, capabilityId: capability.id, capabilityName: capability.displayName, settings: preset.settings || {}, inputBinding: policy.inputBinding || "user-selection", outputLifecycle: policy.outputLifecycle || "persistent", failurePolicy: policy.failurePolicy || "stop" };
+    };
+    if (targetType === "preset") return { id: crypto.randomUUID(), targetType, targetId, createdAt: new Date().toISOString(), steps: [makeStep(presets.get(targetId))] };
+    const protocol = this.state.protocols.find(item => item.id === targetId);
+    if (!protocol) throw new Error("The selected protocol is unavailable.");
+    const steps = protocol.steps.map((step, index) => makeStep(presets.get(step.presetId), index + 1, step));
+    for (let index = 1; index < steps.length; index += 1) {
+      if (steps[index].inputBinding !== "prior-output") continue;
+      const prior = this.capability(steps[index - 1].capabilityId), next = this.capability(steps[index].capabilityId);
+      const outputs = new Set(prior.execution?.outputs || []), inputs = next.execution?.inputs || [];
+      if (!inputs.some(input => outputs.has(input))) throw new Error(`Protocol step ${index + 1} cannot accept an output from step ${index}.`);
+    }
+    return { id: crypto.randomUUID(), targetType, targetId, protocolName: protocol.name, createdAt: new Date().toISOString(), steps };
+  }
+
+  dueSchedules(now = new Date()) {
+    return this.state.schedules.filter(schedule => {
+      if (!schedule.enabled || schedule.status === "completed" || schedule.startPolicy === "manual") return false;
+      if (!schedule.startsAt) return schedule.startPolicy === "start-now";
+      return new Date(schedule.startsAt) <= now;
+    });
+  }
+
   async saveState(next) {
     this.state = {
       ...this.state,
@@ -158,6 +192,20 @@ class DesktopRuntime {
     return record;
   }
 
+  /** Canonical module result envelope for direct runs and future protocol steps. */
+  async commitResult({ capabilityId, action, result, startedAt, finishedAt }) {
+    if (!result || typeof result !== "object" || Array.isArray(result)) throw new Error("A capability result must be an object.");
+    const status = result.status || "succeeded";
+    if (!new Set(["succeeded", "failed", "cancelled"]).has(status)) throw new Error("A capability result has an invalid status.");
+    const artifacts = Array.isArray(result.artifacts) ? result.artifacts : [];
+    for (const artifact of artifacts) {
+      if (!artifact || typeof artifact !== "object" || typeof artifact.ref !== "string" || !artifact.ref.startsWith("artifact://")) throw new Error("Result artifacts must use artifact:// references.");
+    }
+    return this.recordExecution({ capabilityId, action, status, startedAt, finishedAt, details: {
+      result: { version: 1, status, summary: String(result.summary || ""), artifacts, evidence: result.evidence || {}, outputs: result.outputs || {} }
+    } });
+  }
+
   capability(id) { return this.modules.flatMap(module => module.capabilities.map(item => ({ ...item, module }))).find(item => item.id === id); }
 
   async persist() {
@@ -174,6 +222,10 @@ class DesktopRuntime {
 function validateModuleManifest(module, source) {
   const requireText = (value, name) => { if (typeof value !== "string" || !value.trim()) throw new Error(`${source}: ${name} must be a nonblank string.`); };
   ["id", "displayName", "summary", "version", "maturity"].forEach(name => requireText(module[name], name));
+  if (module.rendererEntry !== undefined) {
+    requireText(module.rendererEntry, "rendererEntry");
+    if (module.rendererEntry.includes("..") || path.isAbsolute(module.rendererEntry)) throw new Error(`${source}: rendererEntry must be a module-relative path.`);
+  }
   if (!MATURITY.has(module.maturity)) throw new Error(`${source}: invalid module maturity '${module.maturity}'.`);
   if (!Array.isArray(module.capabilities) || !module.capabilities.length) throw new Error(`${source}: capabilities must be a non-empty array.`);
   for (const capability of module.capabilities) {
@@ -181,6 +233,10 @@ function validateModuleManifest(module, source) {
     if (!MATURITY.has(capability.maturity)) throw new Error(`${source}: invalid capability maturity '${capability.maturity}'.`);
     if (!Array.isArray(capability.adapters)) throw new Error(`${source}: ${capability.id}.adapters must be an array.`);
     if (!Array.isArray(capability.settings || [])) throw new Error(`${source}: ${capability.id}.settings must be an array.`);
+    if (capability.execution !== undefined) {
+      if (!capability.execution || typeof capability.execution !== "object") throw new Error(`${source}: ${capability.id}.execution must be an object.`);
+      if (!Array.isArray(capability.execution.inputs || []) || !Array.isArray(capability.execution.outputs || [])) throw new Error(`${source}: ${capability.id}.execution must declare input and output arrays.`);
+    }
     for (const setting of capability.settings || []) {
       if (!setting || typeof setting !== "object") throw new Error(`${source}: ${capability.id}.settings entries must be objects.`);
       requireText(setting.id, `${capability.id}.setting.id`); requireText(setting.type, `${capability.id}.setting.type`);
@@ -205,6 +261,7 @@ function validateSettings(schema, settings) {
       if (!Number.isInteger(number) || (setting.minimum !== undefined && number < setting.minimum) || (setting.maximum !== undefined && number > setting.maximum)) throw new Error(`'${id}' must be an integer within its declared range.`);
     }
     if (setting.type === "choice" && !setting.choices?.includes(value)) throw new Error(`'${id}' must be one of the declared choices.`);
+    if (setting.type === "text" && typeof value !== "string") throw new Error(`'${id}' must be text.`);
   }
 }
 
