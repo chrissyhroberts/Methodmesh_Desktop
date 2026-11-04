@@ -1,0 +1,101 @@
+# Barcode generate
+
+**Canonical MethodMesh authority:** Master Book v1.31 (2026-09-25)
+**Module ID:** `barcode`  
+**Method ID:** `barcode.generate`  
+**Method version:** `1.0.8`  
+**Maturity:** Development  
+**Connectivity:** Offline
+
+`barcode.generate` turns an exact text payload into a scannable code. Presentation may change; the payload does not.
+
+## Native UX
+
+The generated symbol is the primary instrument. As the payload is typed or pasted, the code updates immediately. There is no separate Generate button. Swipe, previous/next and optional Cycle move only through symbologies that can encode the exact payload. A fixed preset format is not silently replaced: an incompatible fixed format shows a clear error and Commit remains disabled.
+
+QR is the default. Generated QR presentation includes the canonical MethodMesh mark in a conservative central white clearance patch with high QR error correction. Arbitrary custom logos are not supported. Data Matrix, Aztec, PDF417 and linear barcodes remain unbranded.
+
+Full-screen presentation raises screen brightness and keeps the screen awake while active, restoring prior window state on exit. **Commit** freezes payload + selected format + generation timestamp. Direct/native runs remain on the capability surface for Share image, Copy image, Save image, Home and Edit; automatic-return origins return on Commit.
+
+The rendered barcode is the primary native artefact. Share sends the PNG first, Copy places the PNG on the Android clipboard, and Save writes the PNG to Downloads. The payload remains tap-to-copy as a secondary scalar result, but native Share/Copy/Save do not create a redundant payload text file. Optional/preset-requested audit metadata is carried in a JSON sidecar. The PNG remains a presentation/export artefact, not a declared canonical ODK output.
+
+## Execution retention — 23 October 2026
+
+Commit retains the actual execution across ordinary Activity recreation; result actions and caller return use that same FULL evidence. Edit/Commit creates a new record. A surviving marker without its original requires **Start new run**, with no stale result actions. This is in-memory retention, not durable process-death restoration.
+
+See repository handoff `docs/handoffs/PAPER_BARCODE_RETENTION_2026-10-23.md` for exact tests and limitations.
+
+## Cross-surface exposure
+
+`barcode.generate` is independently callable through direct native use, capability discovery/dashboard, presets, protocols, supported schedules/widgets and ODK/XLSForm. Fixed settings remain hidden; runtime inputs remain runtime. Preset `HOME`, `SHARE`, and `SAVE` completion policies are honoured, and preset `CORE`, `AUDIT`, and `FULL` payload modes control whether native Share/Save includes a JSON sidecar.
+
+## Inputs/settings
+
+| Key | Type | Required | Meaning |
+|---|---|---:|---|
+| `barcode_payload` | text | Yes | Exact payload to encode. |
+| `barcode_format` | choice | No | Starting/fixed symbology; default `QR_CODE`. |
+| `barcode_auto_cycle` | boolean | No | Start timed cycling through compatible formats. |
+
+Supported presentation formats: `QR_CODE`, `CODE_128`, `DATA_MATRIX`, `AZTEC`, `PDF_417`, `CODE_39`, `EAN_13`, `EAN_8`, `UPC_A`, `UPC_E`.
+
+The capability never truncates, pads, normalises or rewrites the payload to make it fit a symbology.
+
+## Canonical outputs
+
+| Output | Meaning |
+|---|---|
+| `barcode_payload` | Exact encoded payload; core result. |
+| `barcode_payload_kind` | `text` or `url`. |
+| `barcode_payload_url` | Safe absolute HTTP/HTTPS payload when applicable. |
+| `barcode_format` | Committed presentation symbology. |
+| `barcode_payload_sha256` | SHA-256 of exact payload. |
+| `barcode_generated_time_iso` | Commit/generation timestamp. |
+| `barcode_source` | Normally `methodmesh_generator`. |
+
+## ODK Integration Card
+
+### Capability
+
+`barcode.generate`
+
+### Intent call
+
+```text
+com.example.methodmesh.EXECUTE_METHOD(method_id='barcode.generate',input_barcode_payload=${barcode_payload_input},input_barcode_format=${barcode_format_input},input_barcode_auto_cycle=${barcode_auto_cycle_input},input_payload_mode='FULL',return_mode='flat')
+```
+
+### Canonical returns
+
+`barcode_payload`, `barcode_payload_kind`, `barcode_payload_url`, `barcode_format`, `barcode_payload_sha256`, `barcode_generated_time_iso`, `barcode_source`, plus shared `methodmesh_status` and `methodmesh_full_json`.
+
+Canonical showcase: `docs/example_odk_showcase_barcode_generate.xlsx`. It contains exactly one MethodMesh call, uses canonical unprefixed returns and sets no return namespace.
+
+ODK persists the returned scalar contract and metadata JSON. The native PNG share rendering is deliberately not invented as an XLSForm-only field.
+
+## Permissions and persistence
+
+No camera or network permission is required for generation. There is no barcode wallet/history. Reusable cards/tokens belong in presets rather than a private generator store.
+
+## Capability-owned presets
+
+The generator exposes **Save current setup as preset** in the top preamble, before the barcode canvas, so preset authoring is visible before data entry. Payload, starting format and automatic cycling can each be fixed or runtime. Payload defaults to **Ask when run** to avoid persisting an accidental one-off token; deliberately fixing it creates a reusable card/token preset. Running the preset reopens this same generator UI.
+
+
+## Preset launch stability v1.0.5
+
+Native preset and other external-roundtrip runs are hosted inside MethodMesh's shared vertically scrollable workflow surface. The generator therefore only owns a vertical scroller in dashboard/immersive presentation. Intent/preset/ODK presentation uses the host scroller and must not create a nested same-axis scroll container. Fixed preset `barcode_format` and `barcode_auto_cycle` values are read from both action and request settings so the same preset contract survives every transport projection.
+
+
+## v2.0.4 live preset format controls
+
+Preset values for `barcode_format` and `barcode_auto_cycle` define the starting presentation only. They do not hide or lock the live Generator transport. Previous / Cycle / Next and the compatible-format rail are always rendered during an uncommitted Generator run; controls are disabled only when the exact payload has fewer than two compatible symbologies.
+
+
+## Presentation and capacity cues v1.0.8
+
+- The generator shows UTF-8 byte count and the number of currently encodable symbologies.
+- Symbologies that can no longer represent the exact payload are named explicitly instead of only disappearing from the live rail.
+- Very dense 2D payloads recommend full-screen presentation.
+- Barcode pixels are never covered by the Full screen / close controls. Windowed Full screen is placed outside the code card.
+- Full-screen presentation uses a true full-screen dialog, safe-drawing insets, and centers the symbol in the usable display area so camera cutouts/status regions do not overlap it.

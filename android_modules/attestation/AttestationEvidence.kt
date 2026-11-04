@@ -1,0 +1,319 @@
+package com.example.methodmesh.modules.attestation
+
+import com.example.methodmesh.core.ResearchRuntime
+import com.example.methodmesh.core.crypto.Digests
+import com.example.methodmesh.core.methodmesh.TransformationStatus
+
+/**
+ * Hash-only verification evidence carried by a signed attestation.
+ *
+ * Raw QR, NFC, biometric and study-token values are consumed transiently by the
+ * capability screen. They do not enter the attestation execution request,
+ * observation, graph record, or caller-facing return.
+ */
+data class AttestationEvidence(
+    val format: String,
+    val hash: String
+) {
+    init {
+        require(format.isNotBlank()) { "verification_evidence_format is required" }
+        require(SHA256_HEX.matches(hash)) {
+            "verification_evidence_hash must be a 64-character hexadecimal SHA-256 digest"
+        }
+    }
+
+    companion object {
+        private val SHA256_HEX = Regex("^[0-9a-f]{64}$")
+    }
+}
+
+data class ResolvedAttestationVerification(
+    val evidence: AttestationEvidence,
+    val authenticatedOperatorId: String? = null,
+    /** Stronger-than-request actor evidence resolved inside MethodMesh. */
+    val operatorAssertionBasis: String? = null,
+    val operatorAssertionEvidence: Map<String, String> = emptyMap()
+)
+
+object AttestationEvidenceFactory {
+    // Public nfc_credential_verification contract identifiers. Keep these as
+    // contract strings rather than importing NFC implementation classes: the
+    // attestation module composes with the capability boundary, not NFC internals.
+    private const val NFC_CREDENTIAL_VERIFICATION_METHOD_ID = "nfc_credential_verification"
+    private const val CREDENTIAL_VERIFIED_FIELD = "credential_verified"
+    private const val CREDENTIAL_ID_FIELD = "credential_id"
+    private const val CREDENTIAL_SUBJECT_ID_FIELD = "credential_subject_id"
+    private const val CREDENTIAL_ENVELOPE_HASH_FIELD = "credential_envelope_hash"
+    private const val ISSUER_KEY_ID_FIELD = "issuer_key_id"
+    private const val ISSUER_PUBLIC_KEY_FINGERPRINT_SHA256_FIELD = "issuer_public_key_fingerprint_sha256"
+    private const val SOURCE_VERIFICATION_EVIDENCE_FORMAT_FIELD = "verification_evidence_format"
+    private const val SOURCE_VERIFICATION_EVIDENCE_HASH_FIELD = "verification_evidence_hash"
+    private const val TAG_UID_HEX_FIELD = "tag_uid_hex"
+    private const val PIN_VERIFIED_FIELD = "pin_verified"
+    private const val ISSUER_SIGNATURE_VALID_FIELD = "issuer_signature_valid"
+    private const val ISSUER_TRUST_STATUS_FIELD = "issuer_trust_status"
+    const val BIOMETRIC_FORMAT = "android_biometric_result_sha256_v1"
+    const val DEVICE_CREDENTIAL_FORMAT = "android_device_credential_result_sha256_v1"
+    const val STUDY_TOKEN_FORMAT = "study_token_utf8_sha256_v1"
+    private const val NFC_CREDENTIAL_SOURCE_EVIDENCE_FORMAT = "methodmesh_nfc_credential_verification_v1"
+    const val NFC_CREDENTIAL_EXECUTION_FORMAT = "methodmesh_nfc_credential_execution_sha256_v2"
+
+    fun biometric(result: String): AttestationEvidence = resultEvidence(
+        result = result,
+        format = BIOMETRIC_FORMAT,
+        fallback = "biometric"
+    )
+
+    fun deviceCredential(result: String): AttestationEvidence = resultEvidence(
+        result = result,
+        format = DEVICE_CREDENTIAL_FORMAT,
+        fallback = "device_credential"
+    )
+
+    fun studyToken(token: String): AttestationEvidence {
+        require(token.isNotBlank()) { "Password verification requires a non-blank study token" }
+        return AttestationEvidence(
+            format = STUDY_TOKEN_FORMAT,
+            hash = Digests.sha256Hex(token)
+        )
+    }
+
+    /**
+     * Resolve a prior successful MethodMesh NFC credential + PIN verification.
+     *
+     * The caller supplies only the opaque MethodMesh execution ID. MethodMesh
+     * retrieves its own prior execution record and derives the evidence hash
+     * internally. Caller-provided hidden fields are never accepted as proof of
+     * credential/PIN success.
+     *
+     * To prevent replay between ODK forms, the prior verification and the
+     * attestation call must carry the same caller, form_id, form_version and
+     * form_instance_id. The study identifier is deliberately not part of this
+     * linkage: NFC authenticates the staff operator, while attestation signs
+     * the frozen data state of the current form instance.
+     */
+    fun nfcCredentialExecution(context: Map<String, String>): ResolvedAttestationVerification {
+        val executionId = context["verification_execution_id"]?.trim().orEmpty()
+        require(executionId.isNotBlank()) {
+            "NfcCredential verification requires verification_execution_id from the earlier nfc_credential_verification call"
+        }
+
+        val prior = ResearchRuntime.session.executionResults
+            .firstOrNull { it.request.id.value == executionId }
+            ?: throw IllegalArgumentException(
+                "The referenced NFC credential verification execution is not available in the current MethodMesh session; verify the NFC credential again"
+            )
+
+        require(prior.request.method.id.value == NFC_CREDENTIAL_VERIFICATION_METHOD_ID) {
+            "verification_execution_id does not reference nfc_credential_verification"
+        }
+        require(prior.status == TransformationStatus.Succeeded) {
+            "The referenced NFC credential verification did not succeed"
+        }
+
+        val sourceSoftware = prior.softwareProvenance
+            .firstOrNull { it.id == NFC_CREDENTIAL_VERIFICATION_METHOD_ID }
+            ?: throw IllegalArgumentException(
+                "The referenced NFC credential execution is missing frozen capability provenance"
+            )
+        require(sourceSoftware.version.isNotBlank() && sourceSoftware.module.version.isNotBlank()) {
+            "The referenced NFC credential execution has incomplete capability/module version provenance"
+        }
+
+        val verification = prior.observations
+            .firstOrNull { it.phenomenon == "nfc.credential.verified" }
+            ?: throw IllegalArgumentException(
+                "The referenced NFC credential execution contains no successful credential verification observation"
+            )
+        val values = verification.values
+
+        require(values[CREDENTIAL_VERIFIED_FIELD].equals("true", ignoreCase = true)) {
+            "The referenced NFC credential was not verified"
+        }
+        require(values[PIN_VERIFIED_FIELD].equals("true", ignoreCase = true)) {
+            "The referenced NFC credential PIN was not verified"
+        }
+        require(values[ISSUER_SIGNATURE_VALID_FIELD].equals("true", ignoreCase = true)) {
+            "The referenced NFC credential issuer signature was not valid"
+        }
+
+        val sourceCaller = prior.request.context["caller"]?.trim().orEmpty()
+        val currentCaller = context["caller"]?.trim().orEmpty()
+        require(sourceCaller.isNotBlank() && currentCaller.isNotBlank() && sourceCaller == currentCaller) {
+            "The referenced NFC credential verification belongs to a different caller context"
+        }
+
+        val sourceFormId = prior.request.context["form_id"]?.trim().orEmpty()
+        val currentFormId = context["form_id"]?.trim().orEmpty()
+        require(sourceFormId.isNotBlank() && currentFormId.isNotBlank() && sourceFormId == currentFormId) {
+            "NfcCredential verification reuse requires the same non-blank form_id on both MethodMesh calls"
+        }
+
+        val sourceFormVersion = prior.request.context["form_version"]?.trim().orEmpty()
+        val currentFormVersion = context["form_version"]?.trim().orEmpty()
+        require(
+            sourceFormVersion.isNotBlank() &&
+                currentFormVersion.isNotBlank() &&
+                sourceFormVersion == currentFormVersion
+        ) {
+            "NfcCredential verification reuse requires the same non-blank form_version on both MethodMesh calls"
+        }
+
+        val sourceFormInstanceId = prior.request.context["form_instance_id"]?.trim().orEmpty()
+        val currentFormInstanceId = context["form_instance_id"]?.trim().orEmpty()
+        require(
+            sourceFormInstanceId.isNotBlank() &&
+                currentFormInstanceId.isNotBlank() &&
+                sourceFormInstanceId == currentFormInstanceId
+        ) {
+            "NfcCredential verification reuse requires the same non-blank form_instance_id on both MethodMesh calls"
+        }
+
+        val sourceVisitId = prior.request.context["visit_id"]?.trim().orEmpty()
+        val currentVisitId = context["visit_id"]?.trim().orEmpty()
+        if (sourceVisitId.isNotBlank() && currentVisitId.isNotBlank()) {
+            require(sourceVisitId == currentVisitId) {
+                "The referenced NFC credential verification belongs to a different visit context"
+            }
+        }
+
+        val sourceEventId = prior.request.context["event_id"]?.trim().orEmpty()
+        val currentEventId = context["event_id"]?.trim().orEmpty()
+        if (sourceEventId.isNotBlank() && currentEventId.isNotBlank()) {
+            require(sourceEventId == currentEventId) {
+                "The referenced NFC credential verification belongs to a different event context"
+            }
+        }
+
+        val sourceSubject = prior.request.context["context_entity_id"]
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: prior.request.context["subject_id"]?.trim().orEmpty()
+        val currentSubject = context["context_entity_id"]
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+            ?: context["subject_id"]?.trim().orEmpty()
+        if (sourceSubject.isNotBlank() || currentSubject.isNotBlank()) {
+            require(sourceSubject.isNotBlank() && currentSubject.isNotBlank() && sourceSubject == currentSubject) {
+                "The referenced NFC credential verification belongs to a different subject context"
+            }
+        }
+
+        val credentialId = values[CREDENTIAL_ID_FIELD]?.trim().orEmpty()
+        val credentialSubjectId = values[CREDENTIAL_SUBJECT_ID_FIELD]?.trim().orEmpty()
+        val credentialEnvelopeHash = values[CREDENTIAL_ENVELOPE_HASH_FIELD]?.trim()?.lowercase().orEmpty()
+        val issuerKeyId = values[ISSUER_KEY_ID_FIELD]?.trim()?.lowercase().orEmpty()
+        val issuerFingerprint = values[ISSUER_PUBLIC_KEY_FINGERPRINT_SHA256_FIELD]
+            ?.trim()?.lowercase().orEmpty()
+        val sourceEvidenceFormat = values[SOURCE_VERIFICATION_EVIDENCE_FORMAT_FIELD]
+            ?.trim().orEmpty()
+        val sourceEvidenceHash = values[SOURCE_VERIFICATION_EVIDENCE_HASH_FIELD]
+            ?.trim()?.lowercase().orEmpty()
+        val tagUidHex = normalizeUid(values[TAG_UID_HEX_FIELD]?.trim().orEmpty())
+        val issuerTrustStatus = values[ISSUER_TRUST_STATUS_FIELD]?.trim().orEmpty()
+
+        require(credentialId.isNotBlank() && credentialSubjectId.isNotBlank()) {
+            "The referenced NFC credential execution is missing credential identity fields"
+        }
+        require(SHA256_HEX.matches(credentialEnvelopeHash)) {
+            "The referenced NFC credential execution contains an invalid credential envelope hash"
+        }
+        require(SHA256_HEX.matches(issuerFingerprint)) {
+            "The referenced NFC credential execution is missing a valid full issuer fingerprint"
+        }
+        require(issuerKeyId.isNotBlank() && issuerKeyId == issuerFingerprint.take(16)) {
+            "The referenced NFC credential execution contains inconsistent issuer identity fields"
+        }
+        require(sourceEvidenceFormat == NFC_CREDENTIAL_SOURCE_EVIDENCE_FORMAT) {
+            "The referenced NFC credential execution uses an unsupported verification evidence format"
+        }
+        require(SHA256_HEX.matches(sourceEvidenceHash)) {
+            "The referenced NFC credential execution contains an invalid verification evidence hash"
+        }
+        require(issuerTrustStatus.isNotBlank()) {
+            "The referenced NFC credential execution is missing issuer trust status"
+        }
+
+        val reconstructedSourceEvidenceHash = Digests.sha256Hex(
+            listOf(
+                "verification_evidence_format=$NFC_CREDENTIAL_SOURCE_EVIDENCE_FORMAT",
+                "tag_uid_hex=$tagUidHex",
+                "credential_id=$credentialId",
+                "credential_subject_id=$credentialSubjectId",
+                "credential_envelope_hash=$credentialEnvelopeHash",
+                "issuer_public_key_fingerprint_sha256=$issuerFingerprint",
+                "issuer_signature_valid=true",
+                "pin_verified=true"
+            ).joinToString("\n")
+        )
+        require(reconstructedSourceEvidenceHash == sourceEvidenceHash) {
+            "The referenced NFC credential verification evidence does not reconstruct from its recorded execution fields"
+        }
+
+        val canonical = listOf(
+            "verification_evidence_format=$NFC_CREDENTIAL_EXECUTION_FORMAT",
+            "source_execution_id=$executionId",
+            "source_method_id=${NFC_CREDENTIAL_VERIFICATION_METHOD_ID}",
+            "source_method_version=${sourceSoftware.version}",
+            "source_module_id=${sourceSoftware.module.id}",
+            "source_module_version=${sourceSoftware.module.version}",
+            "credential_id=$credentialId",
+            "credential_subject_id=$credentialSubjectId",
+            "credential_envelope_hash=$credentialEnvelopeHash",
+            "issuer_key_id=$issuerKeyId",
+            "issuer_public_key_fingerprint_sha256=$issuerFingerprint",
+            "source_verification_evidence_format=$sourceEvidenceFormat",
+            "source_verification_evidence_hash=$sourceEvidenceHash",
+            "tag_uid_hex=$tagUidHex",
+            "issuer_trust_status=$issuerTrustStatus",
+            "credential_verified=true",
+            "pin_verified=true",
+            "issuer_signature_valid=true",
+            "caller=$currentCaller",
+            "form_id=$currentFormId",
+            "visit_id=$currentVisitId",
+            "subject_id=$currentSubject"
+        ).joinToString("\n")
+
+        val evidenceHash = Digests.sha256Hex(canonical)
+        val assertionBasis = "nfc_credential_pin_signature_verified"
+
+        return ResolvedAttestationVerification(
+            evidence = AttestationEvidence(
+                format = NFC_CREDENTIAL_EXECUTION_FORMAT,
+                hash = evidenceHash
+            ),
+            authenticatedOperatorId = credentialSubjectId,
+            operatorAssertionBasis = assertionBasis,
+            operatorAssertionEvidence = linkedMapOf(
+                "source_execution_id" to executionId,
+                "source_method_id" to NFC_CREDENTIAL_VERIFICATION_METHOD_ID,
+                "evidence_format" to NFC_CREDENTIAL_EXECUTION_FORMAT,
+                "evidence_hash" to evidenceHash,
+                "issuer_key_id" to issuerKeyId,
+                "issuer_public_key_fingerprint_sha256" to issuerFingerprint,
+                "source_verification_evidence_format" to sourceEvidenceFormat,
+                "source_verification_evidence_hash" to sourceEvidenceHash,
+                "tag_uid_hex" to tagUidHex,
+                "issuer_trust_status" to issuerTrustStatus
+            ).filterValues { it.isNotBlank() }
+        )
+    }
+
+    private fun normalizeUid(value: String): String {
+        val normalized = value.filterNot(Char::isWhitespace).uppercase()
+        require(normalized.isNotBlank() && normalized.length % 2 == 0 && HEX.matches(normalized)) {
+            "The referenced NFC credential execution contains an invalid tag UID"
+        }
+        return normalized
+    }
+
+    private fun resultEvidence(result: String, format: String, fallback: String): AttestationEvidence =
+        AttestationEvidence(
+            format = format,
+            hash = Digests.sha256Hex(result.ifBlank { fallback })
+        )
+
+    private val SHA256_HEX = Regex("^[0-9a-f]{64}$")
+    private val HEX = Regex("^[0-9A-F]+$")
+}

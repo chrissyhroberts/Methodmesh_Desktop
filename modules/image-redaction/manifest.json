@@ -1,0 +1,11 @@
+{
+  "id": "image-redaction",
+  "displayName": "Image annotation and redaction",
+  "summary": "Mask selected image regions and return only a permanently redacted image attachment.",
+  "version": "1.0.0",
+  "maturity": "development",
+  "iconHint": "image",
+  "capabilities": [
+    { "id": "image-redaction", "displayName": "Image redaction", "summary": "Permanently obscure selected regions, then export a new image.", "version": "1.0.0", "maturity": "development", "presentation": "interactive", "adapters": ["file", "evidence"], "settings": [{ "id": "redactionStyle", "label": "Redaction style", "type": "choice", "default": "black", "choices": ["black", "white"] }] }
+  ]
+}

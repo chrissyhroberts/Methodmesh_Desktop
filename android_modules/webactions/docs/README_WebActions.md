@@ -1,0 +1,295 @@
+# MethodMesh Web Actions module v0.07
+
+## Purpose
+
+Web Actions turns human-facing web workflows into canonical MethodMesh capabilities with explicit completion semantics.
+
+It also provides the practical home for MethodMesh's bundled online data links:
+small, ready-to-run capabilities for people collecting data in the field, lab,
+or wider world, and a useful Swiss-army knife for people who otherwise keep a
+different one-purpose app for every public data source.
+
+The normal ODK workflow is intentionally simple:
+
+**paste a Central web-form link → open the form → submit → Central reaches MethodMesh's one-shot return URL → MethodMesh receives a live completion result → Commit / return to caller**
+
+ODK hosted forms are exposed as distinct capabilities for **ODK Web Forms** and **ODK Enketo**, plus a compatibility `web.odk_central_roundtrip` route. Current Central Public Access links use the same `/f/<id>?st=<secret>` shell for either renderer, so the path alone does not identify the renderer.
+
+All capabilities are currently **Development** pending a full MethodMesh Gradle build and real-device integration tests.
+
+## Public capabilities
+
+### `web.odk_central_roundtrip` — ODK Central form
+
+**This is the normal public-webform route. Paste the Central link and open it. No Enketo/Central API token is required.**
+
+Primary user workflow. Paste the web-form URI copied from Central and press **Open form**.
+
+When the form opens, MethodMesh switches to a **full-screen kiosk-style form surface**. The dashboard, setup cards, and MethodMesh result controls are not shown around the live form. The WebView receives the remaining screen height and scrolls normally like a dedicated browser. A compact host/status strip remains at the top with an explicit **Exit form** control. Successful submission closes the kiosk automatically when Central reaches the one-shot `return_url`, revealing the MethodMesh completion/Commit screen again. System Back does not silently count as completion.
+
+Recognised/tolerated link families include:
+
+- current Public Access Links such as `https://central.example/f/...?...`
+- authenticated Data Collector links under `/projects/.../forms/.../submissions/new`
+- legacy Central/Enketo `/-/...` links
+- other valid HTTP(S) Central web-form links
+
+MethodMesh preserves Central-owned query parameters and replaces/adds `return_url` with a one-shot MethodMesh completion URL. For the documented Data Collector `/submissions/new` route, `single=true` is added when it is not already present so Central uses redirect-after-submit behavior. For legacy authenticated `/-/<enketo-id>` Data Collector links, MethodMesh converts the path to the documented `/-/single/<enketo-id>` redirect form. Central remains responsible for selecting ODK Web Forms or Enketo.
+
+A callback means the configured post-submission return URL was reached. It is **not** an independent server-to-server verification of a Central submission instance, so the result deliberately reports `submission_receipt_verified=false` in audit metadata.
+
+Canonical output never contains the pasted source URL. This matters for Public Access Links because `st` is an access token.
+
+### `web.odk_enketo_roundtrip` — ODK Enketo form
+
+For current Central Public Access `/f/<id>?st=<secret>` links, MethodMesh resolves the form metadata through Central's `/v1/form-links/<id>/form?st=...` endpoint before opening the WebView. If Central reports `webformsEnabled`, the run stops with a clear instruction to use the ODK Web Forms capability. If Enketo is configured, MethodMesh bypasses the Central SPA and launches Central's own `/enketo-passthrough/single/<id>` route with the one-shot MethodMesh `return_url`. This mirrors the current Central frontend's Enketo iframe path while avoiding the SPA/WebView blank-screen failure.
+
+The already-encoded `st` query value is copied byte-for-byte into the metadata and passthrough requests. It is never logged, returned canonically, or included in error text. Legacy `/-/` Enketo links remain supported by the existing compatibility path.
+
+#### Enketo SVG image maps
+
+MethodMesh does **not** rewrite provider-owned SVG geometry or responsive sizing. Enketo's `image-map` widget fetches the SVG, sanitizes it, constructs the inline widget, calculates a `viewBox` when one is absent, and applies its own responsive CSS. MethodMesh previously attempted a second generic SVG `viewBox`/width repair after page load; that could change image-map geometry after Enketo initialization and is deliberately removed.
+
+The WebView now treats Enketo SVGs as provider DOM and only emits read-only diagnostic metrics for the ODK Enketo and Kobo Enketo capabilities. Current Enketo interactivity targets selectable `path[id]`, `g[id]`, and `circle[id]` elements. If an SVG renders correctly but some regions remain non-selectable, normalize those selectable regions in the source SVG rather than patching them in MethodMesh.
+
+### `web.precooked_enketo` — Precooked Enketo session
+
+Advanced/programmatic route. Use it when MethodMesh needs to **create a fresh single-submit Enketo session** rather than opening a Central-provided link.
+
+Useful cases include:
+
+- pre-filling participant/specimen/site/visit values from earlier protocol steps
+- injecting values received from ODK or RIL
+- choosing a form dynamically at runtime
+- creating per-run `single` or `single_once` sessions
+- standalone Enketo deployments
+
+Required operational inputs are Enketo API base URL, form server URL, form ID, and API token. The API token is deliberately not part of the typed preset settings schema and is never copied into the committed request context, result, or audit output.
+
+#### Precook / prefill mappings
+
+`prefill_bindings_json` is a flat JSON object mapping Enketo node paths to either fixed text or MethodMesh runtime sources.
+
+Example:
+
+```json
+{
+  "/data/participant_id": "{{participant_id}}",
+  "/data/specimen_id": "{{barcode_value}}",
+  "/data/site_code": "MGB01",
+  "/data/visit_date": "{{today}}"
+}
+```
+
+Runtime source resolution checks the invocation context plus normalized request/action settings, including `input_*` values supplied by ODK and values piped forward by MethodMesh protocols. Built-ins are `{{today}}` and `{{now_iso}}`. If a mapped source is not supplied by the caller, the native screen generates a clean **Values needed for this run** input section for those missing sources instead of forcing the operator to edit JSON.
+
+`defaults_json` remains available as a backwards-compatible flat literal-default object. Literal defaults are merged first; mapped precook values override the same node path.
+
+The Enketo API call follows API v2: POST `/survey/single` or `/survey/single/once`, Basic authentication with the API key as username, form-encoded `server_url`, `form_id`, `return_url`, optional `theme`, and `defaults[/path]=value` entries.
+
+### `web.roundtrip` — Generic web roundtrip
+
+Runs an arbitrary HTTP(S) workflow that accepts a return/callback URL. MethodMesh either replaces a configured placeholder or adds/replaces a named query parameter. The one-shot callback is the completion signal.
+
+This is for non-ODK services. URLs returned in results are redacted for common secret-bearing query names.
+
+### `web.open` — Open web page
+
+Opens a normal HTTP(S) page. Its success result means **browser dispatch succeeded**, not that the remote website completed an operation.
+
+### `webactions.dashboard` — Online data dashboard
+
+The native Web Actions dashboard is the friendly starting point for the named
+online data streams. It keeps function selection, GPS/manual location input,
+fetch, readable result, commit, copy, share, save and FULL JSON export on one
+page. It does not create a second result or storage path.
+
+### `webactions.workflows_dashboard` — Web workflows dashboard
+
+Hosted forms, Enketo sessions, generic web roundtrips and browser pages have a
+separate dashboard. Selecting one opens its own explicit workflow surface and
+completion controls, so browser navigation cannot displace an API result.
+
+### Bundled online data capabilities
+
+The former Workbench API-links tester is no longer a second execution surface.
+Each bundled link is now a normal Web Actions capability with a fixed, clearly
+named provider/data stream and the same shared online-data executor used by
+`api.get`:
+
+| Capability | Data stream |
+|---|---|
+| `web.api.openmeteo_current_weather` | Open-Meteo current weather |
+| `web.api.openmeteo_daily_forecast` | Open-Meteo daily forecast |
+| `web.api.openmeteo_air_quality` | Open-Meteo current air quality |
+| `web.api.gdacs_current_events` | GDACS current disaster events |
+| `web.api.usgs_earthquakes_today` | USGS earthquakes for the last day |
+| `web.api.worldbank_indicator` | Latest World Bank indicator value |
+| `web.api.frankfurter_rates` | Frankfurter reference exchange rates |
+| `web.api.gbif_country_occurrences` | GBIF occurrence records for a country |
+
+Each capability fetches the complete declared response. Compact selected
+fields make the native result readable; **Include full JSON** adds the complete
+response and provenance to the normal share/copy/download actions. For ODK,
+request `input_payload_mode='FULL'`: the complete response is carried in the
+standard `methodmesh_full_json` sidecar. MethodMesh does not become the data
+log or database; it returns the result to the caller or the operator's chosen
+native export action.
+
+Location-aware links disclose their rounded-location behaviour before sending.
+Provider attribution, source/update metadata, cache status and structured
+failure details remain in the result contract. The generic `api.get` capability
+and declarative definition infrastructure remain available for compatibility,
+custom definitions and future editor work; these named webactions are the
+human-friendly shortcuts.
+
+For every location-aware API screen, the operator can choose **Use GPS** or
+**Enter manually**. GPS requests the normal Android location permission and a
+current fix; manual latitude/longitude remains available if permission is
+denied, unavailable, or the operator has a deliberate survey coordinate.
+ODK callers can supply `latitude`/`longitude` directly, or use the compatible
+`gps_latitude`/`gps_longitude` aliases.
+
+## Native UX and Commit lifecycle
+
+The Central capability is deliberately the simplest screen in the module: one prominent Central link field, a compact security/session section, and **Open form**.
+
+Roundtrip capabilities render the web form inside a purpose-built MethodMesh browser surface so active DOM state can survive configuration recreation where possible. File chooser requests are delegated to Android's platform picker. Browser geolocation requests are delegated through Android runtime permission handling and are accepted only for the active transaction's web origin.
+
+While a roundtrip is active, MethodMesh persists the transaction. Offline web-form collection is not the intended roundtrip path because the completion contract depends on the post-submit redirect being reachable; use ODK Collect/offline workflows for genuinely disconnected collection.
+
+MethodMesh persists the transaction. Returning to the capability restores the newest unfinished transaction for that method.
+
+When the one-shot return URL is reached:
+
+- manual/native use shows a live completion result and **Commit**;
+- launch origins marked `submitsImmediately` return the canonical result immediately, avoiding a redundant confirmation in automated/protocol/ODK flows;
+- committed values are tap-to-copy;
+- post-Commit actions support copy/share/save through MethodMesh's normal result path.
+
+Merely navigating back, recreating the Activity, or returning to MethodMesh is never treated as successful web-form completion.
+
+## Presets and protocols
+
+Every public capability remains individually exposed. The dashboard is only one invocation surface.
+
+For `web.odk_central_roundtrip`, a Central URI can be fixed in a preset or left as a runtime field. **Public Access Links can contain an `st` bearer-like access token.** If a token-bearing link is saved as a fixed preset, the preset intentionally stores that operational link. Prefer a runtime URL field when that persistence is not desired.
+
+For the precooked Enketo capability, prefill mapping sources work naturally with protocol piping. Previous MethodMesh result fields are forwarded as subsequent `input_<field>` values by the protocol/scheduler transport and can therefore be referenced as `{{field}}` in a mapping.
+
+The Enketo API token should normally remain a runtime input and should not be saved as ordinary preset configuration.
+
+## ODK/XLSForm roundtrip
+
+The module includes importable XLSForm examples for all four capabilities. They use grouped external-app calls (`begin_group`, `appearance=field-list`) and canonical `input_*` extras.
+
+The Central example's group uses:
+
+```text
+com.example.methodmesh.EXECUTE_METHOD(method_id='web.odk_central_roundtrip',return_mode='flat')
+```
+
+The ODK form supplies `input_url`, optional timeout/security inputs, and requests `input_payload_mode='FULL'`. On completion, MethodMesh returns canonical `web_central_*` fields plus `methodmesh_full_json`.
+
+The precooked Enketo example demonstrates a runtime `participant_id` piped into:
+
+```json
+{"/data/participant_id":"{{participant_id}}"}
+```
+
+The API credential is a masked ODK field and is not part of MethodMesh's committed result context.
+
+## Persistence and security model
+
+An active roundtrip needs two secret-bearing values that must survive ordinary Android lifecycle changes: the callback token and the callback-injected launch URL. Web Actions stores active transaction secret material in app-private SharedPreferences encrypted with AES-GCM using an Android Keystore key. The public portion of the transaction stores only non-secret operational metadata.
+
+Security properties include:
+
+- 24 random bytes for each URL-safe one-shot callback token
+- constant-time callback token comparison
+- callback accepted only for the exact transaction path, HTTPS callback host, and waiting state
+- only top-level WebView navigation can complete a transaction; iframe/resource navigation cannot
+- SSL errors fail closed
+- mixed HTTP content is blocked; HTTP itself requires explicit opt-in
+- `file://` access is disabled
+- geolocation prompts are rejected for unexpected third-party origins
+- Enketo API HTTP redirects are not automatically followed, so Basic credentials cannot be forwarded to a redirect target
+- Central `st`, MethodMesh callback `k`, `return_url`, credential-like query parameters, and known prefill/default query keys are redacted from safe URL representations
+- Central's raw source/launch URL is not a canonical output
+- raw Enketo precook values and API token are not canonical outputs
+- active secret state is deleted after Commit/automatic return, cancellation, timeout, or failed preparation
+
+## Outputs
+
+### ODK Central
+
+- `web_central_status`
+- `web_central_result`
+- `web_central_completed`
+- `web_central_transaction_id`
+- `web_central_host`
+- `web_central_link_kind`
+- `web_central_renderer_mode`
+- `web_central_callback_received`
+- `web_central_completion_signal`
+- `web_central_started_time_iso`
+- `web_central_completed_time_iso`
+- `web_central_duration_ms`
+- `web_central_audit_json`
+- `web_central_error`
+
+### Precooked Enketo
+
+- `web_enketo_status`
+- `web_enketo_result`
+- `web_enketo_completed`
+- `web_enketo_transaction_id`
+- `web_enketo_form_id`
+- `web_enketo_server_url`
+- `web_enketo_launch_host`
+- `web_enketo_callback_received`
+- `web_enketo_completion_signal`
+- `web_enketo_started_time_iso`
+- `web_enketo_completed_time_iso`
+- `web_enketo_duration_ms`
+- `web_enketo_audit_json`
+- `web_enketo_error`
+
+See method descriptors for the generic/open output sets.
+
+## References used for the implementation
+
+- ODK Central — Managing Submissions / web-form links and `return_url`: https://docs.getodk.org/central-submissions/
+- ODK Web Forms: https://docs.getodk.org/web-forms-intro/
+- ODK external apps: https://docs.getodk.org/collect-external-apps/
+- Enketo Smart Paper API v2: https://apidocs.enketo.org/v2
+- MethodMesh v1.05 Module Review and Refresh Manual (project governing document)
+
+## Admission status
+
+**Development / admission candidate.** Source review and static package checks are documented in `VALIDATION.md`. A real MethodMesh `:app:compileDebugKotlin` / app build plus device tests against representative Central ODK Web Forms and Enketo deployments are still required before promotion to Production.
+
+
+### Development migration note
+
+v0.05 renames the advanced programmatic capability from `web.enketo_roundtrip` to `web.precooked_enketo`. This was intentional while the module is still Development: the old ID sorted ahead of the ordinary Central-link capability in the generic capability catalogue and made the token-requiring advanced route look like the normal way to open a public form. The old `web.enketo_roundtrip` identifier is retained as a canonical-action compatibility alias, so existing v0.03 presets/intents continue to route to the advanced capability; new presets should use `web.precooked_enketo`.
+
+## Central/Kobo route handling
+
+MethodMesh preserves provider-owned query parameters, but the Central capability now exposes two session controls for avoiding cached/reusable web forms. **Disposable online session** is on by default: it removes Central Data Collector `/offline` routes, adds `single=true`/`return_url` where Central documents those controls, asks Data Collector routes for `offline=false`, clears WebView storage on launch/exit, and hides draft/offline controls where the page permits it. Public Access `/f/...?...st=...` links remain unchanged for ODK Web Forms and the compatibility route. The dedicated ODK Enketo capability first resolves the renderer and then uses Central's `/enketo-passthrough/single/...` route with a MethodMesh `return_url`, avoiding the Central SPA while preserving the opaque `st` credential. **Fresh browser URL** is also on by default and appends a per-run `_methodmesh_run` value to routes that tolerate it so the WebView/provider does not reuse a cached page. For Kobo/legacy Enketo multi-submit pages, the one-shot callback remains preferred but the online-only kiosk also has the provider-confirmation fallback described below.
+
+## v0.10 provider-confirmation fallback
+
+Some Kobo/legacy Enketo collection links acknowledge a successful submission in-page and immediately prepare the next blank record instead of following `return_url`. MethodMesh still prefers the one-shot `return_url` callback, but the Central capability now has a narrow fallback for this provider behaviour: while a Central/Kobo form is active, the kiosk watches only visible provider dialog/modal surfaces for a strong successful-submission confirmation (for example a visible thank-you/submission-success message). When that confirmation appears, MethodMesh immediately freezes the WebView and returns to the MethodMesh completion state before Enketo can create a fresh auto-saved blank record.
+
+This fallback does **not** treat browser Back, a page reload, a new blank record, or the Enketo `Unsaved Record Found` dialog as success. Results distinguish the evidence source using `web_central_completion_signal`: `central_return_url` for the preferred callback path and `provider_submission_confirmation` for the in-page provider confirmation path. Neither is described as an independently verified server receipt.
+
+
+## v0.10 Central kiosk behaviour
+
+`web.odk_central_roundtrip` is an intentionally **online-only, disposable kiosk**. It uses `LOAD_NO_CACHE`, clears WebView cache/form storage at launch and close, removes service-worker/cache registrations where the provider permits it, hides provider Save Draft controls, and latches a strong visible provider submission-success message immediately after the user presses Submit. The primary completion signal remains the one-shot `return_url`; the provider-success latch is a narrow fallback for legacy/Kobo multi-submit pages that acknowledge upload but do not navigate to `return_url`. After either signal the page is frozen immediately and MethodMesh returns to the result/Commit state. Android Back and the visible **Kill + clear** action both perform the same hard teardown/purge path so a wedged provider session is always escapable.
+
+
+## v0.10 completion behaviour
+
+For `web.odk_central_roundtrip`, a successful return is already the terminal result. Interactive/native runs therefore freeze the result automatically and land directly on the normal MethodMesh result surface with **Done**, **Share**, **Copy**, and **Save to Downloads** actions. There is no extra Commit gate. ODK/protocol/external automatic-return invocations call `onConfirmed` immediately and return the confirmation payload to the originating caller without showing the result-action landing page.

@@ -1,0 +1,12 @@
+{
+  "id": "trusted-timestamp",
+  "displayName": "Trusted timestamp",
+  "summary": "Create and verify portable RFC 3161 proof-of-existence bundles without uploading source content.",
+  "version": "1.0.0",
+  "maturity": "development",
+  "iconHint": "evidence",
+  "capabilities": [
+    { "id": "trusted-timestamp", "displayName": "Create timestamp", "summary": "Create an RFC 3161 proof bundle through FreeTSA.", "version": "1.0.0", "maturity": "development", "presentation": "interactive", "adapters": ["file", "network", "evidence"], "settings": [{ "id": "tsaUrl", "label": "TSA URL", "type": "text", "default": "https://freetsa.org/tsr" }, { "id": "timeoutMs", "label": "Timeout (ms)", "type": "integer", "default": 10000, "minimum": 1000, "maximum": 30000 }] },
+    { "id": "verify-timestamp", "displayName": "Verify timestamp", "summary": "Verify an original file against an RFC 3161 timestamp proof.", "version": "1.0.0", "maturity": "development", "presentation": "interactive", "adapters": ["file", "evidence"], "settings": [] }
+  ]
+}

@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MethodMesh Desktop</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark" aria-label="MethodMesh"><i></i><i></i><i></i></span><span>MethodMesh</span><small>DESKTOP</small></div>
+        <nav id="home-nav" aria-label="Home"><button data-view="dashboard"><span>Dashboard</span><small>DO STUFF</small></button></nav>
+        <p class="nav-heading">CAPABILITIES</p><nav id="module-nav" aria-label="Capabilities"><button data-view="capabilities"><span>Capabilities</span><small>EXPLORE</small></button></nav>
+        <p class="nav-heading workflow-heading">WORKFLOWS</p><nav id="workflow-nav" aria-label="Workflows">
+          <button data-view="presets"><span>Presets</span><small>REUSE</small></button>
+          <button data-view="protocols"><span>Protocols</span><small>CHAIN</small></button>
+          <button data-view="schedules"><span>Schedules</span><small>PLAN</small></button>
+        </nav>
+        <p class="nav-heading workflow-heading">LIBRARY</p><nav id="library-nav" aria-label="Library"><button data-view="files"><span>Files</span><small>ARTIFACTS</small></button><button data-view="history"><span>History</span><small>EXECUTIONS</small></button></nav>
+        <div class="side-note">Local-first framework<br /><span id="adapter-status"></span></div>
+      </aside>
+      <section class="workspace">
+        <header><div><p class="eyebrow">CAPABILITY WORKSPACE</p><h1 id="module-title"></h1><p id="module-summary"></p></div><div id="header-actions"><button id="export-log" class="quiet">Export activity log</button></div></header>
+        <section id="module-root" class="module-root"></section>
+        <footer class="workspace-footer"><span>MethodMesh Desktop · local-first</span><span id="footer-status">Ready</span></footer>
+      </section>
+    </main>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <script src="modules.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>
